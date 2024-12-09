@@ -32,10 +32,10 @@ classifiers = [
     "Typing :: Typed",
 ]
 dynamic = ["version"]
-dependencies = []
+dependencies = ["tqdm"]
 
 [project.optional-dependencies]
-test = ["pytest >=6", "pytest-cov >=3"]
+test = ["pytest >=6", "pytest-cov >=3", "coffea", "scikit-hep-testdata"]
 dev = ["pytest >=6", "pytest-cov >=3"]
 docs = [
     "sphinx>=7.0",
@@ -50,7 +50,6 @@ Homepage = "https://github.com/pfackeldey/rnanotuple"
 "Bug Tracker" = "https://github.com/pfackeldey/rnanotuple/issues"
 Discussions = "https://github.com/pfackeldey/rnanotuple/discussions"
 Changelog = "https://github.com/pfackeldey/rnanotuple/releases"
-
 
 [tool.hatch]
 version.source = "vcs"

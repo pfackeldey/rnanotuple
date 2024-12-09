@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-import ROOT
+try:
+    import ROOT
+except ImportError as err:
+    raise ImportError(
+        """install the 'ROOT' package with:
+
+conda install -c conda-forge root
+"""
+    ) from err
+
+
 from tqdm import tqdm
 
 RNTupleModel = ROOT.Experimental.RNTupleModel
