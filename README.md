@@ -25,3 +25,13 @@
 [rtd-link]:                 https://rnanotuple.readthedocs.io/en/latest/?badge=latest
 
 <!-- prettier-ignore-end -->
+
+# Install Development Environment
+
+Install ROOT v6.34 (or later): https://root.cern/releases/release-63400/.
+Install the rest with:
+
+```bash
+pixi install
+pixi shell
+```
