@@ -1,6 +1,5 @@
 #include <vector>
-#include <set>
-#include <cassert>
+#include <map>
 
 #include "TFile.h"
 #include "TString.h"
@@ -24,231 +23,190 @@ using RVectorField = ROOT::Experimental::RVectorField;
 
 void converter(TString inputFilename, TString outputFilename = "", Bool_t verbose = kTRUE) {
     if (outputFilename == "") {
-        outputFilename = inputFilename(0, inputFilename.Length() - 5) + "_rntuple.root";
+        outputFilename = inputFilename;
+        outputFilename.ReplaceAll(".root", "_rntuple.root");
     }
 
     auto inputFile = TFile::Open(inputFilename);
 
     auto eventsTree = inputFile->Get<TTree>("Events");
 
-    // Names of all branches in the tree
+    // Loop over all branches and categorize them
     auto branchNames = std::vector<TString>();
-    for (auto branch : *eventsTree->GetListOfBranches()) {
-        branchNames.push_back(branch->GetName());
-    }
+    auto countBranchNames = std::vector<TString>();
+    auto collectionFields = std::map<TString, std::vector<TString>>();
+    auto recordFields = std::map<TString, std::vector<TString>>();
+    auto independentFieldNames = std::vector<TString>();
+    for (auto branchPtr : *eventsTree->GetListOfBranches()) {
+        auto branch = static_cast<TBranch *>(branchPtr);
+        auto branchName = TString(branch->GetName());
+        branchNames.push_back(branchName);
 
-    // Names of branches describing the jaggedness of arrays
-    // They are assumed to be all that start with "n"
-    auto jaggednessBranchNames = std::vector<TString>();
-    for (auto branchName : branchNames) {
-        if (branchName.BeginsWith("n")) {
-            jaggednessBranchNames.push_back(branchName(1, branchName.Length() - 1));
+        auto firstLeaf = static_cast<TLeaf *>(branch->GetListOfLeaves()->First());
+        if (firstLeaf->IsRange()) {
+            R__ASSERT(branchName.BeginsWith("n")); // in nanoAOD all count branches start with "n"
+            countBranchNames.push_back(branchName);
+            auto collectionName = branchName(1, branchName.Length());
+            collectionFields[collectionName] = std::vector<TString>();
+            continue;
         }
-    }
 
-    // Names of branches associated with jaggedness branches
-    auto attributeBranchNames = std::vector<std::vector<TString>>(jaggednessBranchNames.size());
-    for (auto branchName : branchNames) {
-        for (size_t i = 0; i < jaggednessBranchNames.size(); i++) {
-            if (branchName.BeginsWith(jaggednessBranchNames[i])) {
-                attributeBranchNames[i].push_back(branchName);
+        auto leafCount = firstLeaf->GetLeafCount();
+        if (leafCount) {
+            auto collectionName = TString(leafCount->GetName());
+            collectionName = collectionName(1, collectionName.Length());
+            R__ASSERT(branchName.BeginsWith(collectionName + "_"));
+            R__ASSERT(collectionFields.find(collectionName) != collectionFields.end());
+            auto subfieldName = branchName(collectionName.Length()+1, branchName.Length());
+            collectionFields[collectionName].push_back(subfieldName);
+            continue;
+        }
+
+        if (branchName.Contains("_")) {
+            auto recordName = branchName(0, branchName.First("_"));
+            if (recordFields.find(recordName) == recordFields.end()) {
+                recordFields[recordName] = std::vector<TString>();
             }
+            recordFields[recordName].push_back(branchName(recordName.Length()+1, branchName.Length()));
+            continue;
         }
-    }
-    auto allAttributeBranchNames = std::vector<TString>();
-    for (auto attributeBranchNames_ : attributeBranchNames) {
-        allAttributeBranchNames.insert(allAttributeBranchNames.end(), attributeBranchNames_.begin(), attributeBranchNames_.end());
-    }
 
-    // Names of groups of branches that are not jagged
-    auto groupNamesSet = std::set<TString>();
-    for (auto branchName : branchNames) {
-        if (branchName.BeginsWith("n") || !branchName.Contains("_")) {
-            continue;
-        }
-        // Make sure they are not already in attributeBranchNames
-        if (std::find(allAttributeBranchNames.begin(), allAttributeBranchNames.end(), branchName) != allAttributeBranchNames.end()) {
-            continue;
-        }
-        groupNamesSet.insert(branchName(0, branchName.First("_")));
-    }
-    auto groupNames = std::vector<TString>(groupNamesSet.begin(), groupNamesSet.end());
-
-    // Names of the branches in each group
-    auto groupBranchNames = std::vector<std::vector<TString>>(groupNames.size());
-    for (auto branchName : branchNames) {
-        for (size_t i = 0; i < groupNames.size(); i++) {
-            if (branchName.BeginsWith(groupNames[i]+"_")) {
-                groupBranchNames[i].push_back(branchName);
-            }
-        }
-    }
-    auto allGroupBranchNames = std::vector<TString>();
-    for (auto groupBranchNames_ : groupBranchNames) {
-        allGroupBranchNames.insert(allGroupBranchNames.end(), groupBranchNames_.begin(), groupBranchNames_.end());
-    }
-
-    // Independent branches
-    auto independentBranchNames = std::vector<TString>();
-    for (auto branchName : branchNames) {
-        if (branchName.BeginsWith("n")) {
-            continue;
-        }
-        if (std::find(allAttributeBranchNames.begin(), allAttributeBranchNames.end(), branchName) != allAttributeBranchNames.end()) {
-            continue;
-        }
-        if (std::find(allGroupBranchNames.begin(), allGroupBranchNames.end(), branchName) != allGroupBranchNames.end()) {
-            continue;
-        }
-        independentBranchNames.push_back(branchName);
+        independentFieldNames.push_back(branchName);
     }
 
     if (verbose) {
         // Print the names of attributes, groups, and independent branches
-        std::cout << "Attributes:" << std::endl;
-        for (size_t i = 0; i < jaggednessBranchNames.size(); i++) {
-            std::cout << jaggednessBranchNames[i] << ":" << std::endl;
-            for (auto attributeBranchName : attributeBranchNames[i]) {
-                std::cout << "    " << attributeBranchName << std::endl;
+        std::cout << "Collections:" << std::endl;
+        for (auto const& [collectionName, subfieldNames] : collectionFields) {
+            std::cout << "  " << collectionName << ":" << std::endl;
+            for (auto subfieldName : subfieldNames) {
+                std::cout << "    " << subfieldName << std::endl;
             }
         }
-        std::cout << "Groups:" << std::endl;
-        for (size_t i = 0; i < groupNames.size(); i++) {
-            std::cout << groupNames[i] << ":" << std::endl;
-            for (auto groupBranchName : groupBranchNames[i]) {
-                std::cout << "    " << groupBranchName << std::endl;
+        std::cout << "Record fields:" << std::endl;
+        for (auto const& [recordName, subfieldNames] : recordFields) {
+            std::cout << "  " << recordName << ":" << std::endl;
+            for (auto subfieldName : subfieldNames) {
+                std::cout << "    " << subfieldName << std::endl;
             }
         }
-        std::cout << "Independent:" << std::endl;
-        for (auto independentBranchName : independentBranchNames) {
-            std::cout << "    " << independentBranchName << std::endl;
+        std::cout << "Independent fields:" << std::endl;
+        for (auto independentFieldName : independentFieldNames) {
+            std::cout << "    " << independentFieldName << std::endl;
         }
     }
 
     // Start constructing the RNTuple model
     auto model = RNTupleModel::Create();
 
-    // Independent branches
-    for (auto independentBranchName : independentBranchNames) {
-        auto branch = eventsTree->GetBranch(independentBranchName);
-        auto leaf = branch->GetLeaf(independentBranchName);
+    // Independent fields
+    for (auto independentFieldName : independentFieldNames) {
+        auto branch = eventsTree->GetBranch(independentFieldName);
+        auto leaf = branch->GetLeaf(independentFieldName);
         auto type = leaf->GetTypeName();
-        auto field = RFieldBase::Create(independentBranchName.Data(), type).Unwrap();
+        auto field = RFieldBase::Create(independentFieldName.Data(), type).Unwrap();
         model->AddField(std::move(field));
     }
 
-    // Jagged branches
-    for (size_t i = 0; i < jaggednessBranchNames.size(); i++) {
-        auto jaggednessBranchName = jaggednessBranchNames[i];
-        std::vector<std::unique_ptr<RFieldBase>> leafFields;
-        for (auto attributeBranchName : attributeBranchNames[i]) {
-            auto branch = eventsTree->GetBranch(attributeBranchName);
-            auto leaf = branch->GetLeaf(attributeBranchName);
+    // Record fields
+    auto recordOffsets = std::map<TString, std::vector<std::size_t>>();
+    for (auto const& [recordName, subfieldNames] : recordFields) {
+        std::vector<std::unique_ptr<RFieldBase>> subfields;
+        for (auto subfieldName : subfieldNames) {
+            auto branch = eventsTree->GetBranch(recordName + "_" + subfieldName);
+            auto leaf = branch->GetLeaf(recordName + "_" + subfieldName);
             auto type = leaf->GetTypeName();
-            auto field = RFieldBase::Create(attributeBranchName(jaggednessBranchName.Length()+1, attributeBranchName.Length()-1), type).Unwrap();
-            leafFields.push_back(std::move(field));
+            auto field = RFieldBase::Create(subfieldName.Data(), type).Unwrap();
+            subfields.push_back(std::move(field));
         }
-        auto recordField = std::make_unique<RRecordField>("_0", std::move(leafFields));
-        auto recordFieldPtr = recordField.get();
-        auto collectionField = RVectorField::CreateUntyped(jaggednessBranchName.Data(), std::move(recordField));
-        model->AddField(std::move(collectionField));
-        // Add projected subfields for leafs
-        for (auto leaf : recordFieldPtr->GetSubFields()) {
-            auto name = leaf->GetFieldName();
-            auto fullname = std::string(jaggednessBranchName.Data()) + "_" + name;
-            //std::cout << "fullname: " << fullname << std::endl;
-            auto type = leaf->GetTypeName();
-            //std::cout << name << " " << jaggednessBranchName << std::endl;
-            //std::cout << "Search: " << model->FindField(jaggednessBranchName) << std::endl;
-            auto projectedField = RFieldBase::Create(fullname, "ROOT::VecOps::RVec<" + type + ">").Unwrap();
-            //std::cout << "projectedField: " << projectedField->GetFieldName() << std::endl;
-            std::string jaggednessBranchName_ = jaggednessBranchName.Data();
-            model->AddProjectedField(std::move(projectedField), [&jaggednessBranchName_, &name, &fullname](const std::string &fieldName) {
-                //cout << fieldName << " " << jaggednessBranchName_ << " " << jaggednessBranchName_ + "._0." + name << endl;
-                if (fieldName == fullname)
-                    return jaggednessBranchName_;
-                else
-                    return jaggednessBranchName_ + "._0." + name;
-            });
-        }
-
+        auto recordField = std::make_unique<RRecordField>(recordName.Data(), std::move(subfields));
+        recordOffsets[recordName] = recordField->GetOffsets();
+        model->AddField(std::move(recordField));
     }
 
-    // Groups
-    std::vector<std::vector<std::size_t>> groupOffsets;
-    std::vector<std::size_t> groupSizes;
-    for (size_t i = 0; i < groupNames.size(); i++) {
-        auto groupName = groupNames[i];
-        std::vector<std::unique_ptr<RFieldBase>> leafFields;
-        for (auto groupBranchName : groupBranchNames[i]) {
-            auto branch = eventsTree->GetBranch(groupBranchName);
-            auto leaf = branch->GetLeaf(groupBranchName);
+    // Collections
+    auto collectionOffsets = std::map<TString, std::vector<std::size_t>>();
+    auto collectionSizes = std::map<TString, std::size_t>();
+    auto collectionLeafSizes = std::map<TString, std::vector<std::size_t>>();
+    auto collectionLeafBranches = std::map<TString, std::vector<TBranch*>>();
+    for (auto const& [collectionName, subfieldNames] : collectionFields) {
+        std::vector<std::unique_ptr<RFieldBase>> subfields;
+        std::vector<TBranch*> subfieldBranches;
+        for (auto subfieldName : subfieldNames) {
+            std::cout << collectionName + "_" + subfieldName << std::endl;
+            auto branch = eventsTree->GetBranch(collectionName + "_" + subfieldName);
+            auto leaf = branch->GetLeaf(collectionName + "_" + subfieldName);
             auto type = leaf->GetTypeName();
-            auto field = RFieldBase::Create(groupBranchName(groupName.Length()+1, groupBranchName.Length()-1), type).Unwrap();
-            leafFields.push_back(std::move(field));
+            auto field = RFieldBase::Create(subfieldName.Data(), type).Unwrap();
+            subfields.push_back(std::move(field));
+            subfieldBranches.push_back(branch);
         }
-        auto recordField = std::make_unique<RRecordField>(groupName.Data(), std::move(leafFields));
-        groupOffsets.push_back(recordField->GetOffsets());
-        groupSizes.push_back(recordField->GetValueSize());
-        model->AddField(std::move(recordField));
+        auto recordField = std::make_unique<RRecordField>("_0", std::move(subfields));
+        collectionOffsets[collectionName] = recordField->GetOffsets();
+        collectionSizes[collectionName] = recordField->GetValueSize();
+        auto leafSizes = std::vector<std::size_t>();
+        for (std::size_t i = 0; i < recordField->GetSubFields().size(); i++) {
+            leafSizes.push_back(recordField->GetSubFields()[i]->GetValueSize());
+        }
+        collectionLeafSizes[collectionName] = std::move(leafSizes);
+        collectionLeafBranches[collectionName] = std::move(subfieldBranches);
+        auto collectionField = RVectorField::CreateUntyped(collectionName.Data(), std::move(recordField));
+        model->AddField(std::move(collectionField));
     }
 
     auto& defEntry = model->GetDefaultEntry();
 
-    // Bind pointers to the independent leaves
-    for (auto independentBranchName : independentBranchNames) {
-        auto branch = eventsTree->GetBranch(independentBranchName);
-        auto leaf = branch->GetLeaf(independentBranchName);
-        defEntry.BindRawPtr(independentBranchName.Data(), leaf->GetValuePointer());
+    // Bind pointers to the independent fields
+    for (auto independentFieldName : independentFieldNames) {
+        auto branch = eventsTree->GetBranch(independentFieldName);
+        auto leaf = branch->GetLeaf(independentFieldName);
+        defEntry.BindRawPtr(independentFieldName.Data(), leaf->GetValuePointer());
     }
 
-    // Jagged branches
-    for (size_t i = 0; i < jaggednessBranchNames.size(); i++) {
-        auto jaggednessBranchName = jaggednessBranchNames[i];
-        auto nBranch = eventsTree->GetBranch("n" + jaggednessBranchName);
-        auto nLeaf = nBranch->GetLeaf("n" + jaggednessBranchName);
-        //auto n = nLeaf->GetValue<int>();
-        for (size_t j = 0; j<attributeBranchNames[i].size(); j++) {
-            auto attributeBranchName = attributeBranchNames[i][j];
-            auto branch = eventsTree->GetBranch(attributeBranchName);
-            auto leaf = branch->GetLeaf(attributeBranchName);
-            //std::cout << jaggednessBranchName << " " << attributeBranchName << " " << leaf->GetTypeName() << std::endl;
-            //defEntry.addValue();
-            //std::cout << defEntry.GetPtr<void>(jaggednessBranchName + "._0." + attributeBranchName(jaggednessBranchName.Length()+1, attributeBranchName.Length())).get() << std::endl;
-            //void* fieldPtr = static_cast<char*>(defEntry.GetPtr<void>(groupName).get()) + groupOffsets[i][j];
-            //std::cout << fieldPtr << std::endl;
-            //eventsTree->SetBranchAddress(groupBranchName, fieldPtr);
-            //break;
-            //entry->BindRawPtr((groupName + "." + groupBranchName(groupName.Length()+1, groupBranchName.Length()-groupName.Length()-1)).Data(), leaf->GetValuePointer());
+    // Bind pointers to the record subfields
+    for (auto const& [recordName, subfieldNames] : recordFields) {
+        for (size_t j = 0; j < subfieldNames.size(); j++) {
+            auto subfieldBranchName = recordName + "_" + subfieldNames[j];
+            auto branch = eventsTree->GetBranch(subfieldBranchName);
+            auto leaf = branch->GetLeaf(subfieldBranchName);
+            void* fieldPtr = static_cast<char*>(defEntry.GetPtr<void>(recordName).get()) + recordOffsets[recordName][j];
+            eventsTree->SetBranchAddress(subfieldBranchName, fieldPtr);
         }
     }
 
-    // Bind pointers to the group leaves
-    for (size_t i = 0; i < groupNames.size(); i++) {
-        auto groupName = groupNames[i];
-        for (size_t j = 0; j<groupBranchNames[i].size(); j++) {
-            auto groupBranchName = groupBranchNames[i][j];
-            auto branch = eventsTree->GetBranch(groupBranchName);
-            auto leaf = branch->GetLeaf(groupBranchName);
-            //std::cout << groupName << " " << groupBranchName << " " << leaf->GetTypeName() << " " << groupSizes[i] << std::endl;
-            //std::cout << defEntry.GetPtr<void>(groupName).get() << std::endl;
-            void* fieldPtr = static_cast<char*>(defEntry.GetPtr<void>(groupName).get()) + groupOffsets[i][j];
-            //std::cout << fieldPtr << std::endl;
-            eventsTree->SetBranchAddress(groupBranchName, fieldPtr);
-            //break;
-            //entry->BindRawPtr((groupName + "." + groupBranchName(groupName.Length()+1, groupBranchName.Length()-groupName.Length()-1)).Data(), leaf->GetValuePointer());
-        }
+    // Collections (these are still pretty clunky)
+    struct CollectionInfo {
+        Int_t maxLength = 0;
+        std::unique_ptr<Int_t> countVal;
+        std::vector<unsigned char> fieldBuffer;
+        std::size_t nLeafs;
+        std::size_t recordSize;
+        std::vector<std::size_t> offsets;
+        std::vector<std::size_t> leafSizes;
+        std::vector<TBranch*> leafBranches;
+    };
+    auto leafCountCollections = std::map<TString, CollectionInfo>();
+    for (auto const& [collectionName, subfieldNames] : collectionFields) {
+        auto countBranch = eventsTree->GetBranch("n" + collectionName);
+        auto firstLeaf = static_cast<TLeaf *>(countBranch->GetListOfLeaves()->First());
+        CollectionInfo c;
+        c.maxLength = firstLeaf->GetMaximum();
+        c.countVal = std::make_unique<Int_t>();
+        c.fieldBuffer.reserve(c.maxLength * collectionSizes[collectionName]);
+        c.nLeafs = subfieldNames.size();
+        c.recordSize = collectionSizes[collectionName];
+        c.offsets = collectionOffsets[collectionName];
+        c.leafSizes = collectionLeafSizes[collectionName];
+        c.leafBranches = collectionLeafBranches[collectionName];
+        eventsTree->SetBranchAddress(countBranch->GetName(), static_cast<void *>(c.countVal.get()));
+        //defEntry.BindRawPtr<void>(collectionName.Data(), &c.fieldBuffer);
+        leafCountCollections.emplace(collectionName, std::move(c));
     }
 
     // Create the RNTuple writer
     auto writer = RNTupleWriter::Recreate(std::move(model), "Events", outputFilename.Data());
 
     auto nEntries = eventsTree->GetEntries();
-
-    //auto entry = writer->CreateEntry();
-    //std::cout << entry->GetPtr<void>("Electronss").get() << std::endl;
-
-
 
 
     // Loop over the entries and fill the RNTuple
@@ -257,6 +215,21 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
             std::cout << "Processing entry " << iEntry << " of " << nEntries << std::endl;
         }
         eventsTree->GetEntry(iEntry);
+
+        for (auto &[_, c] : leafCountCollections) {
+            const auto sizeOfRecord = c.recordSize;
+            c.fieldBuffer.resize(sizeOfRecord * (*c.countVal));
+
+            const auto nLeafs = c.nLeafs;
+            for (std::size_t l = 0; l < nLeafs; ++l) {
+                const auto offset = c.offsets[l];
+                const auto sizeOfLeaf = c.leafSizes[l];
+                const auto leafBranch = c.leafBranches[l];
+                for (Int_t j = 0; j < *c.countVal; ++j) {
+                    //memcpy(c.fieldBuffer.data() + j * sizeOfRecord + offset, leafBranch->fBranchBuffer.get() + (j * sizeOfLeaf), sizeOfLeaf);
+                }
+            }
+        }
 
         writer->Fill();
     }
