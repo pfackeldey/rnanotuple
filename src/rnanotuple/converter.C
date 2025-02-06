@@ -145,7 +145,7 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
             subfields.push_back(std::move(field));
             subfieldBranches.push_back(branch);
             auto branchBuffer = std::make_unique<unsigned char[]>(branchBufferSize);
-            //eventsTree->SetBranchAddress(branch->GetName(), reinterpret_cast<void *>(branchBuffer.get()));
+            eventsTree->SetBranchAddress(branch->GetName(), reinterpret_cast<void *>(branchBuffer.get()));
             collectionBranchBuffers[collectionName].emplace_back(std::move(branchBuffer));
         }
         auto recordField = std::make_unique<RRecordField>("_0", std::move(subfields));
@@ -160,13 +160,20 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
         model->AddField(std::move(collectionField));
     }
 
-    auto& defEntry = model->GetDefaultEntry();
+    //model->Freeze();
+    //auto entry = model->CreateBareEntry();
+
+    // Create the RNTuple writer
+    auto writer = RNTupleWriter::Recreate(std::move(model), "Events", outputFilename.Data());
+
+    auto entry = writer->CreateEntry();
+
 
     // Bind pointers to the independent fields
     for (auto independentFieldName : independentFieldNames) {
         auto branch = eventsTree->GetBranch(independentFieldName);
         auto leaf = branch->GetLeaf(independentFieldName);
-        defEntry.BindRawPtr(independentFieldName.Data(), leaf->GetValuePointer());
+        entry->BindRawPtr(independentFieldName.Data(), leaf->GetValuePointer());
     }
 
     // Bind pointers to the record subfields
@@ -175,7 +182,7 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
             auto subfieldBranchName = recordName + "_" + subfieldNames[j];
             auto branch = eventsTree->GetBranch(subfieldBranchName);
             auto leaf = branch->GetLeaf(subfieldBranchName);
-            void* fieldPtr = static_cast<char*>(defEntry.GetPtr<void>(recordName).get()) + recordOffsets[recordName][j];
+            void* fieldPtr = static_cast<char*>(entry->GetPtr<void>(recordName).get()) + recordOffsets[recordName][j];
             eventsTree->SetBranchAddress(subfieldBranchName, fieldPtr);
         }
     }
@@ -205,27 +212,22 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
         c.leafSizes = collectionLeafSizes[collectionName];
         c.leafBuffers = std::move(collectionBranchBuffers[collectionName]);
         eventsTree->SetBranchAddress(countBranch->GetName(), static_cast<void *>(c.countVal.get()));
-        defEntry.BindRawPtr<void>(collectionName.Data(), &c.fieldBuffer);
+        entry->BindRawPtr<void>(collectionName.Data(), &c.fieldBuffer);
         leafCountCollections.emplace(collectionName, std::move(c));
     }
 
-    // Create the RNTuple writer
-    auto writer = RNTupleWriter::Recreate(std::move(model), "Events", outputFilename.Data());
-
-    auto nEntries = eventsTree->GetEntries();
-
 
     // Loop over the entries and fill the RNTuple
+    auto nEntries = eventsTree->GetEntries();
     for (auto iEntry = 0; iEntry < nEntries; iEntry++) {
-        if (verbose && iEntry % 1000 == 0 || true) {
+        if (verbose && iEntry % 1000 == 0) {
             std::cout << "Processing entry " << iEntry << " of " << nEntries << std::endl;
         }
         eventsTree->GetEntry(iEntry);
 
-        std::cout << "test" << std::endl;
-
-        for (auto &[_, c] : leafCountCollections) {
+        for (auto &[collectionName, c] : leafCountCollections) {
             const auto sizeOfRecord = c.recordSize;
+            std::cout << collectionName << " Resizing to " << sizeOfRecord * (*c.countVal) << std::endl;
             c.fieldBuffer.resize(sizeOfRecord * (*c.countVal));
 
             const auto nLeafs = c.nLeafs;
@@ -234,12 +236,15 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
                 const auto sizeOfLeaf = c.leafSizes[l];
                 const auto &leafBuffer = c.leafBuffers[l];
                 for (Int_t j = 0; j < *c.countVal; ++j) {
-                    memcpy(c.fieldBuffer.data() + j * sizeOfRecord + offset, leafBuffer.get() + (j * sizeOfLeaf), sizeOfLeaf);
+                    std::cout << "Copying " << j * sizeOfRecord + offset << " from " << j * sizeOfLeaf << " size " << sizeOfLeaf << std::endl;
+                    std::memcpy(c.fieldBuffer.data() + j * sizeOfRecord + offset, leafBuffer.get() + (j * sizeOfLeaf), sizeOfLeaf);
+                    std::cout << "Source data:" << *(int8_t*)(leafBuffer.get() + (j * sizeOfLeaf)) << std::endl;
+                    std::cout << "Dest data:" << *(int8_t*)(c.fieldBuffer.data() + j * sizeOfRecord + offset) << std::endl;
                 }
             }
         }
 
-        //writer->Fill();
+        writer->Fill(*entry);
     }
 
 }
