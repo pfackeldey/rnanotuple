@@ -21,7 +21,7 @@ using RRecordField = ROOT::Experimental::RRecordField;
 using RVectorField = ROOT::Experimental::RVectorField;
 
 
-void converter(TString inputFilename, TString outputFilename = "", Bool_t verbose = kTRUE) {
+void converter(TString inputFilename, TString outputFilename = "", Bool_t verbose = kFALSE) {
     if (outputFilename == "") {
         outputFilename = inputFilename;
         outputFilename.ReplaceAll(".root", "_rntuple.root");
@@ -136,7 +136,6 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
         std::vector<TBranch*> subfieldBranches;
         collectionBranchBuffers[collectionName] = std::vector<std::unique_ptr<unsigned char[]>>();
         for (auto subfieldName : subfieldNames) {
-            std::cout << collectionName + "_" + subfieldName << std::endl;
             auto branch = eventsTree->GetBranch(collectionName + "_" + subfieldName);
             auto leaf = branch->GetLeaf(collectionName + "_" + subfieldName);
             auto type = leaf->GetTypeName();
@@ -227,7 +226,6 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
 
         for (auto &[collectionName, c] : leafCountCollections) {
             const auto sizeOfRecord = c.recordSize;
-            std::cout << collectionName << " Resizing to " << sizeOfRecord * (*c.countVal) << std::endl;
             c.fieldBuffer.resize(sizeOfRecord * (*c.countVal));
 
             const auto nLeafs = c.nLeafs;
@@ -236,10 +234,7 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
                 const auto sizeOfLeaf = c.leafSizes[l];
                 const auto &leafBuffer = c.leafBuffers[l];
                 for (Int_t j = 0; j < *c.countVal; ++j) {
-                    std::cout << "Copying " << j * sizeOfRecord + offset << " from " << j * sizeOfLeaf << " size " << sizeOfLeaf << std::endl;
                     std::memcpy(c.fieldBuffer.data() + j * sizeOfRecord + offset, leafBuffer.get() + (j * sizeOfLeaf), sizeOfLeaf);
-                    std::cout << "Source data:" << *(int8_t*)(leafBuffer.get() + (j * sizeOfLeaf)) << std::endl;
-                    std::cout << "Dest data:" << *(int8_t*)(c.fieldBuffer.data() + j * sizeOfRecord + offset) << std::endl;
                 }
             }
         }
