@@ -35,6 +35,7 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
     auto branchNames = std::vector<TString>();
     auto countBranchNames = std::vector<TString>();
     auto collectionFields = std::map<TString, std::vector<TString>>();
+    auto collectionMaxSizes = std::map<TString, std::size_t>();
     auto recordFields = std::map<TString, std::vector<TString>>();
     auto independentFieldNames = std::vector<TString>();
     for (auto branchPtr : *eventsTree->GetListOfBranches()) {
@@ -48,6 +49,7 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
             countBranchNames.push_back(branchName);
             auto collectionName = branchName(1, branchName.Length());
             collectionFields[collectionName] = std::vector<TString>();
+            collectionMaxSizes[collectionName] = firstLeaf->GetMaximum();
             continue;
         }
 
@@ -128,18 +130,23 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
     auto collectionOffsets = std::map<TString, std::vector<std::size_t>>();
     auto collectionSizes = std::map<TString, std::size_t>();
     auto collectionLeafSizes = std::map<TString, std::vector<std::size_t>>();
-    auto collectionLeafBranches = std::map<TString, std::vector<TBranch*>>();
+    auto collectionBranchBuffers = std::map<TString, std::vector<std::unique_ptr<unsigned char[]>>>();
     for (auto const& [collectionName, subfieldNames] : collectionFields) {
         std::vector<std::unique_ptr<RFieldBase>> subfields;
         std::vector<TBranch*> subfieldBranches;
+        collectionBranchBuffers[collectionName] = std::vector<std::unique_ptr<unsigned char[]>>();
         for (auto subfieldName : subfieldNames) {
             std::cout << collectionName + "_" + subfieldName << std::endl;
             auto branch = eventsTree->GetBranch(collectionName + "_" + subfieldName);
             auto leaf = branch->GetLeaf(collectionName + "_" + subfieldName);
             auto type = leaf->GetTypeName();
             auto field = RFieldBase::Create(subfieldName.Data(), type).Unwrap();
+            auto branchBufferSize = collectionMaxSizes[collectionName] * field->GetValueSize();
             subfields.push_back(std::move(field));
             subfieldBranches.push_back(branch);
+            auto branchBuffer = std::make_unique<unsigned char[]>(branchBufferSize);
+            //eventsTree->SetBranchAddress(branch->GetName(), reinterpret_cast<void *>(branchBuffer.get()));
+            collectionBranchBuffers[collectionName].emplace_back(std::move(branchBuffer));
         }
         auto recordField = std::make_unique<RRecordField>("_0", std::move(subfields));
         collectionOffsets[collectionName] = recordField->GetOffsets();
@@ -149,7 +156,6 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
             leafSizes.push_back(recordField->GetSubFields()[i]->GetValueSize());
         }
         collectionLeafSizes[collectionName] = std::move(leafSizes);
-        collectionLeafBranches[collectionName] = std::move(subfieldBranches);
         auto collectionField = RVectorField::CreateUntyped(collectionName.Data(), std::move(recordField));
         model->AddField(std::move(collectionField));
     }
@@ -183,7 +189,7 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
         std::size_t recordSize;
         std::vector<std::size_t> offsets;
         std::vector<std::size_t> leafSizes;
-        std::vector<TBranch*> leafBranches;
+        std::vector<std::unique_ptr<unsigned char[]>> leafBuffers;
     };
     auto leafCountCollections = std::map<TString, CollectionInfo>();
     for (auto const& [collectionName, subfieldNames] : collectionFields) {
@@ -197,9 +203,9 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
         c.recordSize = collectionSizes[collectionName];
         c.offsets = collectionOffsets[collectionName];
         c.leafSizes = collectionLeafSizes[collectionName];
-        c.leafBranches = collectionLeafBranches[collectionName];
+        c.leafBuffers = std::move(collectionBranchBuffers[collectionName]);
         eventsTree->SetBranchAddress(countBranch->GetName(), static_cast<void *>(c.countVal.get()));
-        //defEntry.BindRawPtr<void>(collectionName.Data(), &c.fieldBuffer);
+        defEntry.BindRawPtr<void>(collectionName.Data(), &c.fieldBuffer);
         leafCountCollections.emplace(collectionName, std::move(c));
     }
 
@@ -211,10 +217,12 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
 
     // Loop over the entries and fill the RNTuple
     for (auto iEntry = 0; iEntry < nEntries; iEntry++) {
-        if (verbose && iEntry % 1000 == 0) {
+        if (verbose && iEntry % 1000 == 0 || true) {
             std::cout << "Processing entry " << iEntry << " of " << nEntries << std::endl;
         }
         eventsTree->GetEntry(iEntry);
+
+        std::cout << "test" << std::endl;
 
         for (auto &[_, c] : leafCountCollections) {
             const auto sizeOfRecord = c.recordSize;
@@ -224,14 +232,14 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
             for (std::size_t l = 0; l < nLeafs; ++l) {
                 const auto offset = c.offsets[l];
                 const auto sizeOfLeaf = c.leafSizes[l];
-                const auto leafBranch = c.leafBranches[l];
+                const auto &leafBuffer = c.leafBuffers[l];
                 for (Int_t j = 0; j < *c.countVal; ++j) {
-                    //memcpy(c.fieldBuffer.data() + j * sizeOfRecord + offset, leafBranch->fBranchBuffer.get() + (j * sizeOfLeaf), sizeOfLeaf);
+                    memcpy(c.fieldBuffer.data() + j * sizeOfRecord + offset, leafBuffer.get() + (j * sizeOfLeaf), sizeOfLeaf);
                 }
             }
         }
 
-        writer->Fill();
+        //writer->Fill();
     }
 
 }
