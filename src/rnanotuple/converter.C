@@ -21,7 +21,7 @@ using RRecordField = ROOT::Experimental::RRecordField;
 using RVectorField = ROOT::Experimental::RVectorField;
 
 
-void converter(TString inputFilename, TString outputFilename = "", Bool_t verbose = kFALSE) {
+void converter(TString inputFilename, TString outputFilename = "", Bool_t showProgress = kTRUE) {
     if (outputFilename == "") {
         outputFilename = inputFilename;
         outputFilename.ReplaceAll(".root", "_rntuple.root");
@@ -74,28 +74,6 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
         }
 
         independentFieldNames.push_back(branchName);
-    }
-
-    if (verbose) {
-        // Print the names of attributes, groups, and independent branches
-        std::cout << "Collections:" << std::endl;
-        for (auto const& [collectionName, subfieldNames] : collectionFields) {
-            std::cout << "  " << collectionName << ":" << std::endl;
-            for (auto subfieldName : subfieldNames) {
-                std::cout << "    " << subfieldName << std::endl;
-            }
-        }
-        std::cout << "Record fields:" << std::endl;
-        for (auto const& [recordName, subfieldNames] : recordFields) {
-            std::cout << "  " << recordName << ":" << std::endl;
-            for (auto subfieldName : subfieldNames) {
-                std::cout << "    " << subfieldName << std::endl;
-            }
-        }
-        std::cout << "Independent fields:" << std::endl;
-        for (auto independentFieldName : independentFieldNames) {
-            std::cout << "    " << independentFieldName << std::endl;
-        }
     }
 
     // Start constructing the RNTuple model
@@ -159,14 +137,10 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
         model->AddField(std::move(collectionField));
     }
 
-    //model->Freeze();
-    //auto entry = model->CreateBareEntry();
-
     // Create the RNTuple writer
     auto writer = RNTupleWriter::Recreate(std::move(model), "Events", outputFilename.Data());
 
     auto entry = writer->CreateEntry();
-
 
     // Bind pointers to the independent fields
     for (auto independentFieldName : independentFieldNames) {
@@ -211,15 +185,17 @@ void converter(TString inputFilename, TString outputFilename = "", Bool_t verbos
         c.leafSizes = collectionLeafSizes[collectionName];
         c.leafBuffers = std::move(collectionBranchBuffers[collectionName]);
         eventsTree->SetBranchAddress(countBranch->GetName(), static_cast<void *>(c.countVal.get()));
-        entry->BindRawPtr<void>(collectionName.Data(), &c.fieldBuffer);
         leafCountCollections.emplace(collectionName, std::move(c));
     }
-
+    // Bind pointers to the collection buffers
+    for (auto const& [collectionName, subfieldNames] : collectionFields) {
+        entry->BindRawPtr<void>(collectionName.Data(), &leafCountCollections[collectionName].fieldBuffer);
+    }
 
     // Loop over the entries and fill the RNTuple
     auto nEntries = eventsTree->GetEntries();
     for (auto iEntry = 0; iEntry < nEntries; iEntry++) {
-        if (verbose && iEntry % 1000 == 0) {
+        if (showProgress && iEntry % 1000 == 0) {
             std::cout << "Processing entry " << iEntry << " of " << nEntries << std::endl;
         }
         eventsTree->GetEntry(iEntry);
