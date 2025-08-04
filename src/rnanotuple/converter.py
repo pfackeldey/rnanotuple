@@ -78,7 +78,7 @@ def convert(filename, max_entries=None, progress=True):
                 br = tree.GetListOfBranches()[branch_names.index(a)]
                 t = br.GetLeaf(br.GetName()).GetTypeName()
                 struct_def += f"  {t} "
-                struct_def += f"  {a[len(b)+1:]};\n"
+                struct_def += f"  {a[len(b) + 1 :]};\n"
             struct_def += "};"
             ROOT.gInterpreter.Declare(struct_def)
             model.MakeField[b](b)
@@ -90,7 +90,7 @@ def convert(filename, max_entries=None, progress=True):
                 br = tree.GetListOfBranches()[branch_names.index(a)]
                 t = br.GetLeaf(br.GetName()).GetTypeName()
                 struct_def += f"  {t} "
-                struct_def += f"  {a[len(b):]};\n"
+                struct_def += f"  {a[len(b) :]};\n"
             struct_def += "};"
             ROOT.gInterpreter.Declare(struct_def)
             model.MakeField["std::vector<" + b[1:] + ">"](f"{b[1:]}")
